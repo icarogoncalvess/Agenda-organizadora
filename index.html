@@ -146,6 +146,27 @@
     border-color:var(--ink);
     color:var(--ivory);
   }
+  .chip-x{
+    margin-left:7px;
+    opacity:.6;
+    font-size:14px;
+    line-height:1;
+  }
+  .chip-x:hover{opacity:1;}
+  .chip-add{
+    border-style:dashed;
+    color:var(--gold-deep);
+  }
+  .chip-add:hover{background:var(--rose-soft); border-color:var(--rose);}
+
+  .new-type-panel{
+    display:none;
+    margin-top:12px;
+    padding:14px;
+    background:var(--ivory);
+    border:1px solid var(--line);
+  }
+  .new-type-panel .field:last-of-type{margin-bottom:10px;}
 
   .btn{
     display:inline-flex;
@@ -328,6 +349,22 @@
         <div class="field">
           <label>Tipo de mensagem</label>
           <div class="chips" id="chips"></div>
+
+          <div class="new-type-panel" id="newTypePanel">
+            <div class="field">
+              <label for="ntLabel">Nome do novo tipo</label>
+              <input type="text" id="ntLabel" placeholder="Ex: Pós-procedimento, Aniversário, Reagendamento..." />
+            </div>
+            <div class="field" style="margin-bottom:10px;">
+              <label for="ntText">Texto padrão dessa mensagem</label>
+              <textarea id="ntText" placeholder="Escreva o texto que vai vir pronto sempre que escolher esse tipo. Use {nome} pra entrar o primeiro nome da cliente automaticamente."></textarea>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button class="btn btn-primary" id="ntSave" style="width:auto;">Criar tipo</button>
+              <button class="btn btn-ghost btn-small" id="ntCancel">Cancelar</button>
+            </div>
+            <div class="form-msg error" id="ntMsg"></div>
+          </div>
         </div>
 
         <div class="field">
@@ -368,28 +405,53 @@
 (function(){
 
   // ---------- message templates ----------
-  const TEMPLATES = {
+  // tipos fixos da clínica (não podem ser apagados)
+  const BUILTIN_TEMPLATES = {
     confirmacao: {
       label: "Confirmar agendamento",
-      text: (n) => `Agendamento confirmado com sucesso! 🤍\nVou te encaminhar nosso catálogo de serviços para você conhecer todos os procedimentos disponíveis no Studio.\nFicou alguma dúvida ou posso te ajudar com mais alguma coisa? 😌`
+      text: `Agendamento confirmado com sucesso! 🤍\nVou te encaminhar nosso catálogo de serviços para você conhecer todos os procedimentos disponíveis no Studio.\nFicou alguma dúvida ou posso te ajudar com mais alguma coisa? 😌`
     },
     sinal: {
       label: "Cobrar sinal",
-      text: (n) => `Para garantir seu horário, solicitamos um sinal de *R$100,00*, que será abatido  no dia do procedimento.\n🔑PIX:CNPJ 24319614000107\n\nObs: Por se tratar de um horário reservado  exclusivamente para você, o sinal não é reembolsável em caso de faltas  e desmarque com menos de 24 hrs.\n\nAssim que possível, envie o comprovante para finalizarmos sua reserva na agenda. ✨`
+      text: `Para garantir seu horário, solicitamos um sinal de *R$100,00*, que será abatido  no dia do procedimento.\n🔑PIX:CNPJ 24319614000107\n\nObs: Por se tratar de um horário reservado  exclusivamente para você, o sinal não é reembolsável em caso de faltas  e desmarque com menos de 24 hrs.\n\nAssim que possível, envie o comprovante para finalizarmos sua reserva na agenda. ✨`
     },
     preparo: {
       label: "Preparo pré-procedimento",
-      text: (n) => `*PREPARO PRÉ LIMPEZA*\n✨Não realizar uso de ácidos,esfoliantes, pomadas ou produtos irritativos 4 dias antes.\n✨Intensifique a hidratação do rosto, utilizando seu hidratante 2 a 3x ao dia antes da nossa sessão.\n✨Vir sem maquiagem, se possível.\n✨Caso esteja gestante, amamentando ou com irritações na pele, nos avise.`
+      text: `*PREPARO PRÉ LIMPEZA*\n✨Não realizar uso de ácidos,esfoliantes, pomadas ou produtos irritativos 4 dias antes.\n✨Intensifique a hidratação do rosto, utilizando seu hidratante 2 a 3x ao dia antes da nossa sessão.\n✨Vir sem maquiagem, se possível.\n✨Caso esteja gestante, amamentando ou com irritações na pele, nos avise.`
     },
     lembrete: {
       label: "Lembrete de horário",
-      text: (n) => `Oi${n ? ", " + n.split(" ")[0] : ""}! Passando só pra lembrar do seu horário aqui na Amanda Mendes Clinic. Te esperamos! 🤍`
+      text: `Oi, {nome}! Passando só pra lembrar do seu horário aqui na Amanda Mendes Clinic. Te esperamos! 🤍`
     },
     livre: {
       label: "Mensagem livre",
-      text: (n) => ``
+      text: ``
     }
   };
+
+  // tipos criados pela secretária ficam salvos aqui
+  const CUSTOM_KEY = 'amc_custom_templates';
+
+  function loadCustomTemplates(){
+    try{
+      const raw = localStorage.getItem(CUSTOM_KEY);
+      return raw ? JSON.parse(raw) : [];
+    }catch(e){ return []; }
+  }
+  function saveCustomTemplates(list){
+    localStorage.setItem(CUSTOM_KEY, JSON.stringify(list));
+  }
+  function getAllTemplates(){
+    const all = { ...BUILTIN_TEMPLATES };
+    loadCustomTemplates().forEach(t => { all[t.key] = { label: t.label, text: t.text, custom: true }; });
+    return all;
+  }
+  function applyTemplate(text, fullName){
+    const first = fullName ? fullName.trim().split(' ')[0] : '';
+    return (text || '')
+      .replace(/\{nome_completo\}/g, fullName ? fullName.trim() : '')
+      .replace(/\{nome\}/g, first);
+  }
 
   const chipsEl = document.getElementById('chips');
   const fName = document.getElementById('fName');
@@ -401,22 +463,93 @@
   const agendaEl = document.getElementById('agenda');
   const statToday = document.getElementById('statToday');
   const toastEl = document.getElementById('toast');
+  const newTypePanel = document.getElementById('newTypePanel');
+  const ntLabel = document.getElementById('ntLabel');
+  const ntText = document.getElementById('ntText');
+  const ntMsg = document.getElementById('ntMsg');
 
   let activeType = 'confirmacao';
 
-  Object.keys(TEMPLATES).forEach(key => {
-    const chip = document.createElement('div');
-    chip.className = 'chip' + (key === activeType ? ' active' : '');
-    chip.textContent = TEMPLATES[key].label;
-    chip.dataset.key = key;
-    chip.addEventListener('click', () => {
-      activeType = key;
-      [...chipsEl.children].forEach(c => c.classList.toggle('active', c.dataset.key === key));
-      fMsg.value = TEMPLATES[key].text(fName.value.trim());
+  function selectType(key){
+    activeType = key;
+    const all = getAllTemplates();
+    [...chipsEl.querySelectorAll('.chip')].forEach(c => c.classList.toggle('active', c.dataset.key === key));
+    fMsg.value = applyTemplate(all[key].text, fName.value.trim());
+  }
+
+  function renderChips(){
+    const all = getAllTemplates();
+    chipsEl.innerHTML = '';
+    Object.keys(all).forEach(key => {
+      const chip = document.createElement('div');
+      chip.className = 'chip' + (key === activeType ? ' active' : '');
+      chip.dataset.key = key;
+
+      const label = document.createElement('span');
+      label.textContent = all[key].label;
+      chip.appendChild(label);
+
+      if (all[key].custom){
+        const del = document.createElement('span');
+        del.className = 'chip-x';
+        del.textContent = '×';
+        del.title = 'Excluir este tipo de mensagem';
+        del.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!confirm(`Excluir o tipo "${all[key].label}"?`)) return;
+          saveCustomTemplates(loadCustomTemplates().filter(t => t.key !== key));
+          if (activeType === key) activeType = 'confirmacao';
+          renderChips();
+          selectType(activeType);
+        });
+        chip.appendChild(del);
+      }
+
+      chip.addEventListener('click', () => selectType(key));
+      chipsEl.appendChild(chip);
     });
-    chipsEl.appendChild(chip);
+
+    const addChip = document.createElement('div');
+    addChip.className = 'chip chip-add';
+    addChip.textContent = '+ Novo tipo';
+    addChip.addEventListener('click', () => {
+      newTypePanel.style.display = newTypePanel.style.display === 'block' ? 'none' : 'block';
+      if (newTypePanel.style.display === 'block') ntLabel.focus();
+    });
+    chipsEl.appendChild(addChip);
+  }
+
+  renderChips();
+  selectType(activeType);
+
+  // ---------- criar novo tipo de mensagem ----------
+  document.getElementById('ntSave').addEventListener('click', () => {
+    const label = ntLabel.value.trim();
+    const text = ntText.value.trim();
+    ntMsg.textContent = '';
+    if (!label){ ntMsg.textContent = 'Dá um nome pra esse tipo de mensagem.'; ntLabel.focus(); return; }
+    if (!text){ ntMsg.textContent = 'Escreve o texto padrão dessa mensagem.'; ntText.focus(); return; }
+
+    const key = 'custom_' + Date.now();
+    const list = loadCustomTemplates();
+    list.push({ key, label, text });
+    saveCustomTemplates(list);
+
+    ntLabel.value = '';
+    ntText.value = '';
+    newTypePanel.style.display = 'none';
+    renderChips();
+    selectType(key);
+    showToast('Novo tipo de mensagem criado ✨');
   });
-  fMsg.value = TEMPLATES[activeType].text('');
+
+  document.getElementById('ntCancel').addEventListener('click', () => {
+    ntLabel.value = '';
+    ntText.value = '';
+    ntMsg.textContent = '';
+    newTypePanel.style.display = 'none';
+  });
+
 
   // default datetime = amanhã 09:00
   (function setDefaultWhen(){
@@ -492,7 +625,7 @@
       name,
       phone: fPhone.value.trim(),
       type: activeType,
-      typeLabel: TEMPLATES[activeType].label,
+      typeLabel: getAllTemplates()[activeType].label,
       message,
       when,
       done: false,
@@ -507,7 +640,7 @@
       showToast('Lembrete salvo na agenda ✨');
       fName.value = '';
       fPhone.value = '';
-      fMsg.value = TEMPLATES[activeType].text('');
+      fMsg.value = applyTemplate(getAllTemplates()[activeType].text, '');
       await refresh();
     }catch(e){
       formMsg.textContent = 'Não deu pra salvar agora. Tenta de novo em alguns segundos.';
